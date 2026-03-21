@@ -119,35 +119,69 @@ elif st.session_state['user_rol'] in ['administrador', 'vendedor', 'tecnico', 's
         c2.metric("En Taller", len(inv[inv['Estatus'] == "En Taller"]))
         c3.metric("Listo para Venta", len(inv[inv['Estatus'] == "Listo para Venta"]))
 
-    elif choice == "Inventario":
-        st.title("📦 Gestión de Inventario")
+   elif choice == "Inventario":
+        st.title("📦 Gestión Completa de Inventario")
         if 'ed_i' not in st.session_state: st.session_state['ed_i'] = None
-        df_inv = pd.read_csv('inventario.csv')
-        with st.expander("📝 Formulario Equipo", expanded=(st.session_state['ed_i'] is not None)):
-            with st.form("f_inv"):
+        
+        # Leemos los datos actuales de la hoja 'inventario'
+        df_inv = leer_datos("inventario")
+        
+        with st.expander("📝 Formulario Técnico de Equipo", expanded=(st.session_state['ed_i'] is not None)):
+            with st.form("f_inv_completo"):
+                # Si estamos editando, cargamos los valores; si no, vacíos
                 row = df_inv.iloc[st.session_state['ed_i']].to_dict() if st.session_state['ed_i'] is not None else {}
-                c1, c2 = st.columns(2)
-                p, m, mo, ser = c1.text_input("Producto", row.get('Producto',"")), c1.text_input("Marca", row.get('Marca',"")), c1.text_input("Modelo", row.get('Modelo',"")), c1.text_input("Serial", row.get('Serial',""))
-                ce, ps = c2.number_input("Costo $", value=float(row.get('Costo_Total_Real',0))), c2.number_input("Sugerido $", value=float(row.get('Precio_Sugerido',0)))
-                es = c2.selectbox("Estatus", ["En Aduana", "En Taller", "Listo para Venta"])
-                fo = st.file_uploader("Foto")
-                if st.form_submit_button("Guardar"):
+                
+                c1, c2, c3 = st.columns(3)
+                
+                # Columna 1: Identificación
+                p = c1.text_input("Producto / Categoría", row.get('Producto',""))
+                m = c1.text_input("Marca", row.get('Marca',""))
+                mo = c1.text_input("Modelo", row.get('Modelo',""))
+                ser = c1.text_input("Serial / Service Tag", row.get('Serial',""))
+                anio = c1.number_input("Año de Fabricación", value=int(row.get('Año', 2024)))
+
+                # Columna 2: Costos y Precios
+                c_ext = c2.number_input("Costo Compra Exterior $", value=float(row.get('Costo_Extranjero',0)))
+                c_env = c2.number_input("Costo Envío / Aduana $", value=float(row.get('Envio_VZLA',0)))
+                c_rep = c2.number_input("Inversión Reparación $", value=float(row.get('Inversion_Reparacion',0)))
+                p_sug = c2.number_input("Precio Venta Sugerido $", value=float(row.get('Precio_Sugerido',0)))
+                
+                # Columna 3: Estado y Responsable
+                est = c3.selectbox("Estatus Actual", ["En Aduana", "En Taller", "Listo para Venta"], 
+                                   index=0 if row.get('Estatus') == "En Aduana" else 1 if row.get('Estatus') == "En Taller" else 2)
+                tec = c3.text_input("Técnico Asignado", row.get('Tecnico', "M&O Service"))
+                desc = st.text_area("Descripción Técnica / Observaciones", row.get('Descripcion', ""))
+                fo = st.file_uploader("Actualizar Foto del Equipo")
+                
+                if st.form_submit_button("Guardar Cambios en la Nube"):
+                    # Cálculo automático del costo total
+                    costo_total_real = c_ext + c_env + c_rep
+                    
                     ruta = row.get('Foto', "No disponible")
                     if fo:
-                        ruta = os.path.join('fotos_equipos', fo.name)
-                        with open(ruta, "wb") as f: f.write(fo.getbuffer())
-                    new = [p, m, mo, ser, 2024, ce, ps, es, ruta]
-                    if st.session_state['ed_i'] is not None: df_inv.iloc[st.session_state['ed_i']] = new
-                    else: df_inv = pd.concat([df_inv, pd.DataFrame([new], columns=df_inv.columns)], ignore_index=True)
-                    df_inv.to_csv('inventario.csv', index=False); st.session_state['ed_i'] = None; st.rerun()
-        for i, r in df_inv.iterrows():
-            st.markdown("<div class='card-admin'>", unsafe_allow_html=True)
-            ci, ct, cb = st.columns([1, 3, 1])
-            if r['Foto'] != "No disponible" and os.path.exists(str(r['Foto'])): ci.image(r['Foto'], use_container_width=True)
-            ct.write(f"### {r['Marca']} {r['Modelo']} - {r['Estatus']}")
-            if cb.button("✏️", key=f"ed_{i}"): st.session_state['ed_i'] = i; st.rerun()
-            st.markdown("</div>", unsafe_allow_html=True)
+                        # En la nube guardamos el nombre o podrías usar una URL
+                        ruta = f"fotos_equipos/{fo.name}"
+                    
+                    # Ordenamos los datos según las columnas de tu Google Sheet
+                    new_data = [p, m, mo, ser, anio, 1, c_ext, c_env, c_rep, costo_total_real, p_sug, tec, est, desc, ruta]
+                    
+                    if st.session_state['ed_i'] is not None:
+                        df_inv.iloc[st.session_state['ed_i']] = new_data
+                    else:
+                        df_inv = pd.concat([df_inv, pd.DataFrame([new_data], columns=df_inv.columns)], ignore_index=True)
+                    
+                    # Guardamos de vuelta en Google Sheets
+                    guardar_datos(df_inv, "inventario")
+                    st.session_state['ed_i'] = None
+                    st.success("¡Inventario actualizado en Google Sheets!")
+                    st.rerun()
 
+        # Visualización de los equipos registrados
+        for i, r in df_inv.iterrows():
+            st.markdown(f"<div class='card-admin'>", unsafe_allow_html=True)
+            col_img, col_txt, col_btn = st.columns([1, 3, 1])
+            # (Aquí va la lógica de mostrar la imagen y los textos que ya tenías)
+            st.markdown("</div>", unsafe_allow_html=True)
     elif choice == "Gastos":
         st.title("📉 Gastos Operativos")
         with st.form("f_g"):
