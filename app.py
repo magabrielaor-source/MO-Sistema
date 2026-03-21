@@ -1,40 +1,26 @@
 import streamlit as st
+from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 import os
 from datetime import datetime
 from PIL import Image
 
-# --- 1. CONFIGURACIÓN DE IDENTIDAD ---
+# --- CONFIGURACIÓN DE IDENTIDAD ---
 EMPRESA = "M&O MEDICAL SERVICE C.A"
 RIF = "J-507007383"
 FILENAME_LOGO = "WhatsApp Image 2026-03-20 at 21.44.39.jpeg"
 
-# --- 2. INICIALIZACIÓN DE ARCHIVOS ---
-def inicializar_archivos():
-    if not os.path.exists('fotos_equipos'): os.makedirs('fotos_equipos')
-    config = {
-        'inventario.csv': ['Producto', 'Marca', 'Modelo', 'Serial', 'Año', 'Costo_Total_Real', 'Precio_Sugerido', 'Estatus', 'Foto'],
-        'ventas.csv': ['Fecha', 'Equipo', 'Serial', 'Precio_Venta', 'Costo_Inversion', 'Utilidad_Neta'],
-        'gastos.csv': ['Fecha', 'Concepto', 'Monto'],
-        'informes.csv': ['Fecha', 'Equipo', 'Serial', 'Cliente', 'Procedimiento', 'Prox_Mant'],
-        'clientes.csv': ['Fecha_Reg', 'Empresa', 'Nombre', 'Apellido', 'Profesion', 'Correo', 'WhatsApp', 'Password'],
-        'usuarios_staff.csv': ['Usuario', 'Password', 'Rol', 'Permisos']
-    }
-    for nombre, columnas in config.items():
-        if not os.path.exists(nombre):
-            df = pd.DataFrame(columns=columnas)
-            if nombre == 'usuarios_staff.csv':
-                df = pd.DataFrame([["admin", "MO2026", "administrador", "Dashboard,Inventario,Ventas,Gastos,Informes,Usuarios,Clientes"]], columns=columnas)
-            df.to_csv(nombre, index=False)
-        else:
-            df = pd.read_csv(nombre)
-            for col in columnas:
-                if col not in df.columns: df[col] = 0
-            df.to_csv(nombre, index=False)
+# --- CONEXIÓN A GOOGLE SHEETS ---
+conn = st.connection("gsheets", type=GSheetsConnection)
 
-inicializar_archivos()
+def leer_datos(pestaña):
+    return conn.read(worksheet=pestaña, ttl=0)
 
-# --- 3. CONFIGURACIÓN VISUAL ---
+def guardar_datos(df, pestaña):
+    conn.update(worksheet=pestaña, data=df)
+    st.cache_data.clear()
+
+# --- CONFIGURACIÓN VISUAL ---
 st.set_page_config(page_title=EMPRESA, layout="wide", page_icon="🏥")
 
 st.markdown("""
@@ -46,12 +32,12 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- 4. MANEJO DE SESIÓN ---
+# --- MANEJO DE SESIÓN ---
 if 'user_rol' not in st.session_state: st.session_state['user_rol'] = 'visitante'
 if 'user_permisos' not in st.session_state: st.session_state['user_permisos'] = []
 if 'user_email' not in st.session_state: st.session_state['user_email'] = None
 
-# --- 5. BARRA LATERAL ---
+# --- BARRA LATERAL ---
 with st.sidebar:
     if os.path.exists(FILENAME_LOGO): st.image(FILENAME_LOGO, use_container_width=True)
     st.markdown(f"<div style='text-align:center;'><b>{EMPRESA}</b><br><small>{RIF}</small></div>", unsafe_allow_html=True)
@@ -62,20 +48,15 @@ with st.sidebar:
         u_log = st.text_input("Usuario / Correo")
         p_log = st.text_input("Contraseña", type="password")
         if st.button("Iniciar Sesión"):
-            df_staff = pd.read_csv('usuarios_staff.csv')
+            df_staff = leer_datos("usuarios_staff")
             staff_match = df_staff[(df_staff['Usuario'] == u_log) & (df_staff['Password'] == str(p_log))]
             if not staff_match.empty:
                 rol = staff_match.iloc[0]['Rol']
-                # Fuerza permisos totales si es administrador
-                if rol == "administrador":
-                    permisos = ["Dashboard", "Inventario", "Ventas", "Gastos", "Informes", "Usuarios", "Clientes"]
-                else:
-                    permisos = staff_match.iloc[0]['Permisos'].split(',')
-                
-                st.session_state.update({'user_rol': rol, 'user_email': u_log, 'user_permisos': permisos})
+                perms = ["Dashboard", "Inventario", "Ventas", "Gastos", "Informes", "Usuarios", "Clientes"] if rol == "administrador" else staff_match.iloc[0]['Permisos'].split(',')
+                st.session_state.update({'user_rol': rol, 'user_email': u_log, 'user_permisos': perms})
                 st.rerun()
             else:
-                df_c = pd.read_csv('clientes.csv')
+                df_c = leer_datos("clientes")
                 c_match = df_c[(df_c['Correo'] == u_log) & (df_c['Password'] == str(p_log))]
                 if not c_match.empty:
                     st.session_state.update({'user_rol': 'cliente', 'user_email': u_log})
@@ -91,162 +72,85 @@ with st.sidebar:
             st.session_state.clear()
             st.rerun()
 
-# --- 6. LÓGICA DE VISTAS ---
+# --- LÓGICA DE VISTAS ---
 
 if st.session_state['user_rol'] == 'registro_cliente':
     st.title("📝 Registro de Cliente Nuevo")
     with st.form("reg_full"):
         c1, c2 = st.columns(2)
         n, a = c1.text_input("Nombre*"), c1.text_input("Apellido*")
-        e, p = c1.text_input("Empresa"), c2.text_input("Profesión*")
+        e, prof = c1.text_input("Empresa"), c2.text_input("Profesión*")
         m, w = c2.text_input("Correo*"), c2.text_input("WhatsApp*")
         pw = st.text_input("Contraseña*", type="password")
         if st.form_submit_button("Registrar"):
-            df_cl = pd.read_csv('clientes.csv')
-            pd.concat([df_cl, pd.DataFrame([[datetime.now().date(), e, n, a, p, m, w, pw]], columns=df_cl.columns)], ignore_index=True).to_csv('clientes.csv', index=False)
+            df_cl = leer_datos("clientes")
+            pd.concat([df_cl, pd.DataFrame([[datetime.now().date(), e, n, a, prof, m, w, pw]], columns=df_cl.columns)], ignore_index=True).to_csv('clientes.csv', index=False)
             st.success("Cuenta creada."); st.session_state['user_rol'] = 'visitante'; st.rerun()
-    if st.button("Volver"): st.session_state['user_rol'] = 'visitante'; st.rerun()
 
 elif st.session_state['user_rol'] in ['administrador', 'vendedor', 'tecnico', 'staff']:
     choice = st.sidebar.selectbox("Panel Administrativo:", st.session_state['user_permisos'])
     
     if choice == "Dashboard":
         st.title("📊 Resumen Ejecutivo")
-        v, g, inv = pd.read_csv('ventas.csv'), pd.read_csv('gastos.csv'), pd.read_csv('inventario.csv')
+        v, g, inv = leer_datos("ventas"), leer_datos("gastos"), leer_datos("inventario")
         util = (v['Utilidad_Neta'].sum() if not v.empty else 0) - (g['Monto'].sum() if not g.empty else 0)
         c1, c2, c3 = st.columns(3)
         c1.metric("Utilidad Neta Real", f"${util:,.2f}")
         c2.metric("En Taller", len(inv[inv['Estatus'] == "En Taller"]))
         c3.metric("Listo para Venta", len(inv[inv['Estatus'] == "Listo para Venta"]))
 
-   elif choice == "Inventario":
+    elif choice == "Inventario":
         st.title("📦 Gestión Completa de Inventario")
         if 'ed_i' not in st.session_state: st.session_state['ed_i'] = None
-        
-        # Leemos los datos actuales de la hoja 'inventario'
         df_inv = leer_datos("inventario")
         
         with st.expander("📝 Formulario Técnico de Equipo", expanded=(st.session_state['ed_i'] is not None)):
             with st.form("f_inv_completo"):
-                # Si estamos editando, cargamos los valores; si no, vacíos
                 row = df_inv.iloc[st.session_state['ed_i']].to_dict() if st.session_state['ed_i'] is not None else {}
-                
                 c1, c2, c3 = st.columns(3)
-                
-                # Columna 1: Identificación
-                p = c1.text_input("Producto / Categoría", row.get('Producto',""))
-                m = c1.text_input("Marca", row.get('Marca',""))
-                mo = c1.text_input("Modelo", row.get('Modelo',""))
-                ser = c1.text_input("Serial / Service Tag", row.get('Serial',""))
-                anio = c1.number_input("Año de Fabricación", value=int(row.get('Año', 2024)))
+                p, m, mo = c1.text_input("Producto", row.get('Producto',"")), c1.text_input("Marca", row.get('Marca',"")), c1.text_input("Modelo", row.get('Modelo',""))
+                ser, anio = c1.text_input("Serial", row.get('Serial',"")), c1.number_input("Año", value=int(row.get('Año', 2024)))
+                c_ext, c_env, c_rep = c2.number_input("Costo Exterior $", value=float(row.get('Costo_Extranjero',0))), c2.number_input("Envío $", value=float(row.get('Envio_VZLA',0))), c2.number_input("Reparación $", value=float(row.get('Inversion_Reparacion',0)))
+                p_sug, est = c2.number_input("Precio Sugerido $", value=float(row.get('Precio_Sugerido',0))), c3.selectbox("Estatus", ["En Aduana", "En Taller", "Listo para Venta"])
+                tec, desc = c3.text_input("Técnico", row.get('Tecnico', "M&O")), st.text_area("Descripción", row.get('Descripcion', ""))
+                if st.form_submit_button("Guardar Cambios"):
+                    costo_t = c_ext + c_env + c_rep
+                    new = [p, m, mo, ser, anio, 1, c_ext, c_env, c_rep, costo_t, p_sug, tec, est, desc, row.get('Foto', "No disponible")]
+                    if st.session_state['ed_i'] is not None: df_inv.iloc[st.session_state['ed_i']] = new
+                    else: df_inv = pd.concat([df_inv, pd.DataFrame([new], columns=df_inv.columns)], ignore_index=True)
+                    guardar_datos(df_inv, "inventario"); st.session_state['ed_i'] = None; st.rerun()
 
-                # Columna 2: Costos y Precios
-                c_ext = c2.number_input("Costo Compra Exterior $", value=float(row.get('Costo_Extranjero',0)))
-                c_env = c2.number_input("Costo Envío / Aduana $", value=float(row.get('Envio_VZLA',0)))
-                c_rep = c2.number_input("Inversión Reparación $", value=float(row.get('Inversion_Reparacion',0)))
-                p_sug = c2.number_input("Precio Venta Sugerido $", value=float(row.get('Precio_Sugerido',0)))
-                
-                # Columna 3: Estado y Responsable
-                est = c3.selectbox("Estatus Actual", ["En Aduana", "En Taller", "Listo para Venta"], 
-                                   index=0 if row.get('Estatus') == "En Aduana" else 1 if row.get('Estatus') == "En Taller" else 2)
-                tec = c3.text_input("Técnico Asignado", row.get('Tecnico', "M&O Service"))
-                desc = st.text_area("Descripción Técnica / Observaciones", row.get('Descripcion', ""))
-                fo = st.file_uploader("Actualizar Foto del Equipo")
-                
-                if st.form_submit_button("Guardar Cambios en la Nube"):
-                    # Cálculo automático del costo total
-                    costo_total_real = c_ext + c_env + c_rep
-                    
-                    ruta = row.get('Foto', "No disponible")
-                    if fo:
-                        # En la nube guardamos el nombre o podrías usar una URL
-                        ruta = f"fotos_equipos/{fo.name}"
-                    
-                    # Ordenamos los datos según las columnas de tu Google Sheet
-                    new_data = [p, m, mo, ser, anio, 1, c_ext, c_env, c_rep, costo_total_real, p_sug, tec, est, desc, ruta]
-                    
-                    if st.session_state['ed_i'] is not None:
-                        df_inv.iloc[st.session_state['ed_i']] = new_data
-                    else:
-                        df_inv = pd.concat([df_inv, pd.DataFrame([new_data], columns=df_inv.columns)], ignore_index=True)
-                    
-                    # Guardamos de vuelta en Google Sheets
-                    guardar_datos(df_inv, "inventario")
-                    st.session_state['ed_i'] = None
-                    st.success("¡Inventario actualizado en Google Sheets!")
-                    st.rerun()
-
-        # Visualización de los equipos registrados
         for i, r in df_inv.iterrows():
-            st.markdown(f"<div class='card-admin'>", unsafe_allow_html=True)
-            col_img, col_txt, col_btn = st.columns([1, 3, 1])
-            # (Aquí va la lógica de mostrar la imagen y los textos que ya tenías)
+            st.markdown("<div class='card-admin'>", unsafe_allow_html=True)
+            ci, ct, cb = st.columns([1, 3, 1])
+            ct.write(f"### {r['Marca']} {r['Modelo']} - {r['Estatus']}")
+            ct.write(f"S/N: {r['Serial']} | Inversión: ${r['Costo_Total_Real']:.2f}")
+            if cb.button("✏️", key=f"ed_{i}"): st.session_state['ed_i'] = i; st.rerun()
             st.markdown("</div>", unsafe_allow_html=True)
+
     elif choice == "Gastos":
         st.title("📉 Gastos Operativos")
+        df_g = leer_datos("gastos")
         with st.form("f_g"):
             con, mon = st.text_input("Concepto"), st.number_input("Monto $", min_value=0.0)
             if st.form_submit_button("Guardar Gasto"):
-                df_g = pd.read_csv('gastos.csv')
-                pd.concat([df_g, pd.DataFrame([[datetime.now().date(), con, mon]], columns=df_g.columns)], ignore_index=True).to_csv('gastos.csv', index=False); st.rerun()
-        st.table(pd.read_csv('gastos.csv'))
+                pd.concat([df_g, pd.DataFrame([[datetime.now().date(), con, mon]], columns=df_g.columns)], ignore_index=True).pipe(guardar_datos, "gastos"); st.rerun()
+        st.table(df_g)
 
     elif choice == "Informes":
         st.title("📝 Informes Técnicos")
+        df_inf = leer_datos("informes")
         with st.expander("🆕 Nuevo Informe"):
             with st.form("f_inf"):
-                c1, c2 = st.columns(2)
-                e, s, cl = c1.text_input("Equipo"), c1.text_input("Serial"), c1.text_input("Cliente")
-                p, pm = c2.text_area("Trabajo"), c2.date_input("Próxima Cita")
+                e, s, cl = st.text_input("Equipo"), st.text_input("Serial"), st.text_input("Cliente")
+                p, pm = st.text_area("Trabajo"), st.date_input("Próxima Cita")
                 if st.form_submit_button("Registrar"):
-                    df_inf = pd.read_csv('informes.csv')
-                    pd.concat([df_inf, pd.DataFrame([[datetime.now().date(), e, s, cl, p, pm]], columns=df_inf.columns)], ignore_index=True).to_csv('informes.csv', index=False); st.rerun()
-        st.dataframe(pd.read_csv('informes.csv'), use_container_width=True)
-
-    elif choice == "Usuarios":
-        st.title("👥 Gestión Staff")
-        df_u = pd.read_csv('usuarios_staff.csv')
-        with st.form("new_u"):
-            un, up, ur = st.text_input("Nombre"), st.text_input("Clave"), st.selectbox("Rol", ["administrador", "tecnico", "vendedor"])
-            perms = st.multiselect("Permisos", ["Dashboard", "Inventario", "Ventas", "Gastos", "Informes", "Usuarios", "Clientes"])
-            if st.form_submit_button("Crear"):
-                pd.concat([df_u, pd.DataFrame([[un, up, ur, ",".join(perms)]], columns=df_u.columns)], ignore_index=True).to_csv('usuarios_staff.csv', index=False); st.rerun()
-        st.dataframe(df_u)
-
-    elif choice == "Clientes":
-        st.title("👥 Base Clientes")
-        df_cl = pd.read_csv('clientes.csv')
-        st.dataframe(df_cl)
-        st.download_button("📥 Exportar CSV", df_cl.to_csv(index=False).encode('utf-8'), "clientes.csv", "text/csv")
-
-    elif choice == "Ventas":
-        st.title("💰 Procesar Venta")
-        inv = pd.read_csv('inventario.csv')
-        listos = inv[inv['Estatus'] == "Listo para Venta"]
-        if listos.empty: st.warning("Sin equipos listos.")
-        else:
-            for idx, r in listos.iterrows():
-                with st.container():
-                    c1, c2, c3 = st.columns([1, 2, 1])
-                    if r['Foto'] != "No disponible": c1.image(r['Foto'], width=150)
-                    c2.write(f"**{r['Marca']} {r['Modelo']}** (S/N: {r['Serial']})")
-                    if c3.button("Cerrar Venta", key=f"v_{idx}"):
-                        st.session_state['v_sn_in'] = r['Serial']
-                st.divider()
-            if 'v_sn_in' in st.session_state:
-                dat = listos[listos['Serial'] == st.session_state['v_sn_in']].iloc[0]
-                with st.form("f_v_p"):
-                    pf = st.number_input("Precio Final $", value=float(dat['Precio_Sugerido']))
-                    if st.form_submit_button("Confirmar"):
-                        gan = pf - dat['Costo_Total_Real']
-                        v_df = pd.read_csv('ventas.csv')
-                        pd.concat([v_df, pd.DataFrame([[datetime.now().date(), f"{dat['Marca']} {dat['Modelo']}", dat['Serial'], pf, dat['Costo_Total_Real'], gan]], columns=v_df.columns)], ignore_index=True).to_csv('ventas.csv', index=False)
-                        inv.loc[inv['Serial'] == st.session_state['v_sn_in'], 'Estatus'] = "Vendido"
-                        inv.to_csv('inventario.csv', index=False); del st.session_state['v_sn_in']; st.rerun()
+                    pd.concat([df_inf, pd.DataFrame([[datetime.now().date(), e, s, cl, p, pm]], columns=df_inf.columns)], ignore_index=True).pipe(guardar_datos, "informes"); st.rerun()
+        st.dataframe(df_inf, use_container_width=True)
 
 else:
     st.markdown(f"<h1 style='text-align:center; color:#1e3a8a;'>VITRINA MÉDICA M&O</h1>", unsafe_allow_html=True)
-    inv = pd.read_csv('inventario.csv')
+    inv = leer_datos("inventario")
     listos = inv[inv['Estatus'] == "Listo para Venta"]
     if listos.empty: st.info("Próximamente más equipos.")
     else:
@@ -254,7 +158,6 @@ else:
         for idx, (_, r) in enumerate(listos.iterrows()):
             with cols[idx % 3]:
                 st.markdown("<div class='card-publica'>", unsafe_allow_html=True)
-                if r['Foto'] != "No disponible" and os.path.exists(str(r['Foto'])): st.image(r['Foto'], use_container_width=True)
                 st.subheader(f"{r['Marca']} {r['Modelo']}")
                 st.markdown(f"<div class='precio-tag'>${r['Precio_Sugerido']:,.2f}</div>", unsafe_allow_html=True)
                 if st.session_state['user_rol'] == 'cliente':
