@@ -32,7 +32,6 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- MANEJO DE SESIÓN ---
 if 'user_rol' not in st.session_state: st.session_state['user_rol'] = 'visitante'
 if 'user_permisos' not in st.session_state: st.session_state['user_permisos'] = []
 if 'user_email' not in st.session_state: st.session_state['user_email'] = None
@@ -52,7 +51,7 @@ with st.sidebar:
             staff_match = df_staff[(df_staff['Usuario'] == u_log) & (df_staff['Password'] == str(p_log))]
             if not staff_match.empty:
                 rol = staff_match.iloc[0]['Rol']
-                perms = ["Dashboard", "Inventario", "Ventas", "Gastos", "Informes", "Usuarios", "Clientes"] if rol == "administrador" else staff_match.iloc[0]['Permisos'].split(',')
+                perms = ["Dashboard", "Inventario", "Ventas", "Gastos", "Informes", "Usuarios", "Clientes"] if rol == "administrador" else str(staff_match.iloc[0]['Permisos']).split(',')
                 st.session_state.update({'user_rol': rol, 'user_email': u_log, 'user_permisos': perms})
                 st.rerun()
             else:
@@ -73,7 +72,6 @@ with st.sidebar:
             st.rerun()
 
 # --- LÓGICA DE VISTAS ---
-
 if st.session_state['user_rol'] == 'registro_cliente':
     st.title("📝 Registro de Cliente Nuevo")
     with st.form("reg_full"):
@@ -84,7 +82,8 @@ if st.session_state['user_rol'] == 'registro_cliente':
         pw = st.text_input("Contraseña*", type="password")
         if st.form_submit_button("Registrar"):
             df_cl = leer_datos("clientes")
-            pd.concat([df_cl, pd.DataFrame([[datetime.now().date(), e, n, a, prof, m, w, pw]], columns=df_cl.columns)], ignore_index=True).to_csv('clientes.csv', index=False)
+            nuevo_cli = pd.DataFrame([[datetime.now().date(), e, n, a, prof, m, w, pw]], columns=df_cl.columns)
+            guardar_datos(pd.concat([df_cl, nuevo_cli], ignore_index=True), "clientes")
             st.success("Cuenta creada."); st.session_state['user_rol'] = 'visitante'; st.rerun()
 
 elif st.session_state['user_rol'] in ['administrador', 'vendedor', 'tecnico', 'staff']:
@@ -93,39 +92,38 @@ elif st.session_state['user_rol'] in ['administrador', 'vendedor', 'tecnico', 's
     if choice == "Dashboard":
         st.title("📊 Resumen Ejecutivo")
         v, g, inv = leer_datos("ventas"), leer_datos("gastos"), leer_datos("inventario")
-        util = (v['Utilidad_Neta'].sum() if not v.empty else 0) - (g['Monto'].sum() if not g.empty else 0)
+        util = (pd.to_numeric(v['Utilidad_Neta']).sum() if not v.empty else 0) - (pd.to_numeric(g['Monto']).sum() if not g.empty else 0)
         c1, c2, c3 = st.columns(3)
         c1.metric("Utilidad Neta Real", f"${util:,.2f}")
         c2.metric("En Taller", len(inv[inv['Estatus'] == "En Taller"]))
         c3.metric("Listo para Venta", len(inv[inv['Estatus'] == "Listo para Venta"]))
 
     elif choice == "Inventario":
-        st.title("📦 Gestión Completa de Inventario")
+        st.title("📦 Gestión de Inventario")
         if 'ed_i' not in st.session_state: st.session_state['ed_i'] = None
         df_inv = leer_datos("inventario")
-        
-        with st.expander("📝 Formulario Técnico de Equipo", expanded=(st.session_state['ed_i'] is not None)):
-            with st.form("f_inv_completo"):
+        with st.expander("📝 Formulario Técnico", expanded=(st.session_state['ed_i'] is not None)):
+            with st.form("f_inv"):
                 row = df_inv.iloc[st.session_state['ed_i']].to_dict() if st.session_state['ed_i'] is not None else {}
                 c1, c2, c3 = st.columns(3)
                 p, m, mo = c1.text_input("Producto", row.get('Producto',"")), c1.text_input("Marca", row.get('Marca',"")), c1.text_input("Modelo", row.get('Modelo',""))
                 ser, anio = c1.text_input("Serial", row.get('Serial',"")), c1.number_input("Año", value=int(row.get('Año', 2024)))
                 c_ext, c_env, c_rep = c2.number_input("Costo Exterior $", value=float(row.get('Costo_Extranjero',0))), c2.number_input("Envío $", value=float(row.get('Envio_VZLA',0))), c2.number_input("Reparación $", value=float(row.get('Inversion_Reparacion',0)))
-                p_sug, est = c2.number_input("Precio Sugerido $", value=float(row.get('Precio_Sugerido',0))), c3.selectbox("Estatus", ["En Aduana", "En Taller", "Listo para Venta"])
+                ps, es = c2.number_input("Precio Sugerido $", value=float(row.get('Precio_Sugerido',0))), c3.selectbox("Estatus", ["En Aduana", "En Taller", "Listo para Venta"])
                 tec, desc = c3.text_input("Técnico", row.get('Tecnico', "M&O")), st.text_area("Descripción", row.get('Descripcion', ""))
                 if st.form_submit_button("Guardar Cambios"):
-                    costo_t = c_ext + c_env + c_rep
-                    new = [p, m, mo, ser, anio, 1, c_ext, c_env, c_rep, costo_t, p_sug, tec, est, desc, row.get('Foto', "No disponible")]
+                    ct = c_ext + c_env + c_rep
+                    new = [p, m, mo, ser, anio, 1, c_ext, c_env, c_rep, ct, ps, tec, es, desc, row.get('Foto', "No disponible")]
                     if st.session_state['ed_i'] is not None: df_inv.iloc[st.session_state['ed_i']] = new
                     else: df_inv = pd.concat([df_inv, pd.DataFrame([new], columns=df_inv.columns)], ignore_index=True)
                     guardar_datos(df_inv, "inventario"); st.session_state['ed_i'] = None; st.rerun()
 
         for i, r in df_inv.iterrows():
             st.markdown("<div class='card-admin'>", unsafe_allow_html=True)
-            ci, ct, cb = st.columns([1, 3, 1])
-            ct.write(f"### {r['Marca']} {r['Modelo']} - {r['Estatus']}")
-            ct.write(f"S/N: {r['Serial']} | Inversión: ${r['Costo_Total_Real']:.2f}")
-            if cb.button("✏️", key=f"ed_{i}"): st.session_state['ed_i'] = i; st.rerun()
+            c_txt, c_bt = st.columns([4, 1])
+            c_txt.write(f"### {r['Marca']} {r['Modelo']} - {r['Estatus']}")
+            c_txt.write(f"S/N: {r['Serial']} | Inversión: ${r['Costo_Total_Real']}")
+            if c_bt.button("✏️", key=f"ed_{i}"): st.session_state['ed_i'] = i; st.rerun()
             st.markdown("</div>", unsafe_allow_html=True)
 
     elif choice == "Gastos":
@@ -134,7 +132,8 @@ elif st.session_state['user_rol'] in ['administrador', 'vendedor', 'tecnico', 's
         with st.form("f_g"):
             con, mon = st.text_input("Concepto"), st.number_input("Monto $", min_value=0.0)
             if st.form_submit_button("Guardar Gasto"):
-                pd.concat([df_g, pd.DataFrame([[datetime.now().date(), con, mon]], columns=df_g.columns)], ignore_index=True).pipe(guardar_datos, "gastos"); st.rerun()
+                df_nuevo = pd.DataFrame([[datetime.now().date(), con, mon]], columns=df_g.columns)
+                guardar_datos(pd.concat([df_g, df_nuevo], ignore_index=True), "gastos"); st.rerun()
         st.table(df_g)
 
     elif choice == "Informes":
@@ -145,7 +144,8 @@ elif st.session_state['user_rol'] in ['administrador', 'vendedor', 'tecnico', 's
                 e, s, cl = st.text_input("Equipo"), st.text_input("Serial"), st.text_input("Cliente")
                 p, pm = st.text_area("Trabajo"), st.date_input("Próxima Cita")
                 if st.form_submit_button("Registrar"):
-                    pd.concat([df_inf, pd.DataFrame([[datetime.now().date(), e, s, cl, p, pm]], columns=df_inf.columns)], ignore_index=True).pipe(guardar_datos, "informes"); st.rerun()
+                    df_nuevo = pd.DataFrame([[datetime.now().date(), e, s, cl, p, pm]], columns=df_inf.columns)
+                    guardar_datos(pd.concat([df_inf, df_nuevo], ignore_index=True), "informes"); st.rerun()
         st.dataframe(df_inf, use_container_width=True)
 
 else:
@@ -159,7 +159,7 @@ else:
             with cols[idx % 3]:
                 st.markdown("<div class='card-publica'>", unsafe_allow_html=True)
                 st.subheader(f"{r['Marca']} {r['Modelo']}")
-                st.markdown(f"<div class='precio-tag'>${r['Precio_Sugerido']:,.2f}</div>", unsafe_allow_html=True)
+                st.markdown(f"<div class='precio-tag'>${r['Precio_Sugerido']}</div>", unsafe_allow_html=True)
                 if st.session_state['user_rol'] == 'cliente':
                     if st.button("🛒 Consultar", key=f"pub_{idx}"): st.success("Ingeniero notificado.")
                 else: st.info("Inicia sesión para adquirir")
