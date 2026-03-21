@@ -14,9 +14,11 @@ FILENAME_LOGO = "WhatsApp Image 2026-03-20 at 21.44.39.jpeg"
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 def leer_datos(pestaña):
+    # Lee la pestaña especificada. ttl=0 asegura datos frescos.
     return conn.read(worksheet=pestaña, ttl=0)
 
 def guardar_datos(df, pestaña):
+    # Actualiza la hoja de cálculo en la nube
     conn.update(worksheet=pestaña, data=df)
     st.cache_data.clear()
 
@@ -32,6 +34,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# --- MANEJO DE SESIÓN ---
 if 'user_rol' not in st.session_state: st.session_state['user_rol'] = 'visitante'
 if 'user_permisos' not in st.session_state: st.session_state['user_permisos'] = []
 if 'user_email' not in st.session_state: st.session_state['user_email'] = None
@@ -51,7 +54,11 @@ with st.sidebar:
             staff_match = df_staff[(df_staff['Usuario'] == u_log) & (df_staff['Password'] == str(p_log))]
             if not staff_match.empty:
                 rol = staff_match.iloc[0]['Rol']
-                perms = ["Dashboard", "Inventario", "Ventas", "Gastos", "Informes", "Usuarios", "Clientes"] if rol == "administrador" else str(staff_match.iloc[0]['Permisos']).split(',')
+                # Si es admin, dar todos los permisos automáticamente
+                if rol == "administrador":
+                    perms = ["Dashboard", "Inventario", "Ventas", "Gastos", "Informes", "Usuarios", "Clientes"]
+                else:
+                    perms = str(staff_match.iloc[0]['Permisos']).split(',')
                 st.session_state.update({'user_rol': rol, 'user_email': u_log, 'user_permisos': perms})
                 st.rerun()
             else:
@@ -72,6 +79,7 @@ with st.sidebar:
             st.rerun()
 
 # --- LÓGICA DE VISTAS ---
+
 if st.session_state['user_rol'] == 'registro_cliente':
     st.title("📝 Registro de Cliente Nuevo")
     with st.form("reg_full"):
@@ -92,38 +100,59 @@ elif st.session_state['user_rol'] in ['administrador', 'vendedor', 'tecnico', 's
     if choice == "Dashboard":
         st.title("📊 Resumen Ejecutivo")
         v, g, inv = leer_datos("ventas"), leer_datos("gastos"), leer_datos("inventario")
-        util = (pd.to_numeric(v['Utilidad_Neta']).sum() if not v.empty else 0) - (pd.to_numeric(g['Monto']).sum() if not g.empty else 0)
+        # Aseguramos que los valores sean numéricos para el cálculo
+        v['Utilidad_Neta'] = pd.to_numeric(v['Utilidad_Neta'], errors='coerce').fillna(0)
+        g['Monto'] = pd.to_numeric(g['Monto'], errors='coerce').fillna(0)
+        util = v['Utilidad_Neta'].sum() - g['Monto'].sum()
         c1, c2, c3 = st.columns(3)
         c1.metric("Utilidad Neta Real", f"${util:,.2f}")
         c2.metric("En Taller", len(inv[inv['Estatus'] == "En Taller"]))
         c3.metric("Listo para Venta", len(inv[inv['Estatus'] == "Listo para Venta"]))
 
     elif choice == "Inventario":
-        st.title("📦 Gestión de Inventario")
+        st.title("📦 Gestión de Inventario Completa")
         if 'ed_i' not in st.session_state: st.session_state['ed_i'] = None
         df_inv = leer_datos("inventario")
+        
         with st.expander("📝 Formulario Técnico", expanded=(st.session_state['ed_i'] is not None)):
             with st.form("f_inv"):
                 row = df_inv.iloc[st.session_state['ed_i']].to_dict() if st.session_state['ed_i'] is not None else {}
                 c1, c2, c3 = st.columns(3)
-                p, m, mo = c1.text_input("Producto", row.get('Producto',"")), c1.text_input("Marca", row.get('Marca',"")), c1.text_input("Modelo", row.get('Modelo',""))
-                ser, anio = c1.text_input("Serial", row.get('Serial',"")), c1.number_input("Año", value=int(row.get('Año', 2024)))
-                c_ext, c_env, c_rep = c2.number_input("Costo Exterior $", value=float(row.get('Costo_Extranjero',0))), c2.number_input("Envío $", value=float(row.get('Envio_VZLA',0))), c2.number_input("Reparación $", value=float(row.get('Inversion_Reparacion',0)))
-                ps, es = c2.number_input("Precio Sugerido $", value=float(row.get('Precio_Sugerido',0))), c3.selectbox("Estatus", ["En Aduana", "En Taller", "Listo para Venta"])
-                tec, desc = c3.text_input("Técnico", row.get('Tecnico', "M&O")), st.text_area("Descripción", row.get('Descripcion', ""))
+                p = c1.text_input("Producto", row.get('Producto',""))
+                m = c1.text_input("Marca", row.get('Marca',""))
+                mo = c1.text_input("Modelo", row.get('Modelo',""))
+                ser = c1.text_input("Serial", row.get('Serial',""))
+                anio = c1.number_input("Año", value=int(row.get('Año', 2024)))
+                
+                c_ext = c2.number_input("Costo Exterior $", value=float(row.get('Costo_Extranjero',0)))
+                c_env = c2.number_input("Envío $", value=float(row.get('Envio_VZLA',0)))
+                c_rep = c2.number_input("Reparación $", value=float(row.get('Inversion_Reparacion',0)))
+                ps = c2.number_input("Precio Sugerido $", value=float(row.get('Precio_Sugerido',0)))
+                
+                es = c3.selectbox("Estatus", ["En Aduana", "En Taller", "Listo para Venta"])
+                tec = c3.text_input("Técnico", row.get('Tecnico', "M&O Service"))
+                desc = st.text_area("Descripción", row.get('Descripcion', ""))
+                
                 if st.form_submit_button("Guardar Cambios"):
                     ct = c_ext + c_env + c_rep
+                    # Estructura exacta de columnas para tu Sheet
                     new = [p, m, mo, ser, anio, 1, c_ext, c_env, c_rep, ct, ps, tec, es, desc, row.get('Foto', "No disponible")]
-                    if st.session_state['ed_i'] is not None: df_inv.iloc[st.session_state['ed_i']] = new
-                    else: df_inv = pd.concat([df_inv, pd.DataFrame([new], columns=df_inv.columns)], ignore_index=True)
-                    guardar_datos(df_inv, "inventario"); st.session_state['ed_i'] = None; st.rerun()
+                    if st.session_state['ed_i'] is not None:
+                        df_inv.iloc[st.session_state['ed_i']] = new
+                    else:
+                        df_inv = pd.concat([df_inv, pd.DataFrame([new], columns=df_inv.columns)], ignore_index=True)
+                    guardar_datos(df_inv, "inventario")
+                    st.session_state['ed_i'] = None
+                    st.rerun()
 
         for i, r in df_inv.iterrows():
             st.markdown("<div class='card-admin'>", unsafe_allow_html=True)
             c_txt, c_bt = st.columns([4, 1])
             c_txt.write(f"### {r['Marca']} {r['Modelo']} - {r['Estatus']}")
-            c_txt.write(f"S/N: {r['Serial']} | Inversión: ${r['Costo_Total_Real']}")
-            if c_bt.button("✏️", key=f"ed_{i}"): st.session_state['ed_i'] = i; st.rerun()
+            c_txt.write(f"S/N: {r['Serial']} | Inversión Total: ${r['Costo_Total_Real']}")
+            if c_bt.button("✏️ Editar", key=f"ed_{i}"):
+                st.session_state['ed_i'] = i
+                st.rerun()
             st.markdown("</div>", unsafe_allow_html=True)
 
     elif choice == "Gastos":
@@ -133,7 +162,8 @@ elif st.session_state['user_rol'] in ['administrador', 'vendedor', 'tecnico', 's
             con, mon = st.text_input("Concepto"), st.number_input("Monto $", min_value=0.0)
             if st.form_submit_button("Guardar Gasto"):
                 df_nuevo = pd.DataFrame([[datetime.now().date(), con, mon]], columns=df_g.columns)
-                guardar_datos(pd.concat([df_g, df_nuevo], ignore_index=True), "gastos"); st.rerun()
+                guardar_datos(pd.concat([df_g, df_nuevo], ignore_index=True), "gastos")
+                st.rerun()
         st.table(df_g)
 
     elif choice == "Informes":
@@ -142,25 +172,30 @@ elif st.session_state['user_rol'] in ['administrador', 'vendedor', 'tecnico', 's
         with st.expander("🆕 Nuevo Informe"):
             with st.form("f_inf"):
                 e, s, cl = st.text_input("Equipo"), st.text_input("Serial"), st.text_input("Cliente")
-                p, pm = st.text_area("Trabajo"), st.date_input("Próxima Cita")
-                if st.form_submit_button("Registrar"):
+                p, pm = st.text_area("Trabajo Realizado"), st.date_input("Próxima Cita")
+                if st.form_submit_button("Registrar Informe"):
                     df_nuevo = pd.DataFrame([[datetime.now().date(), e, s, cl, p, pm]], columns=df_inf.columns)
-                    guardar_datos(pd.concat([df_inf, df_nuevo], ignore_index=True), "informes"); st.rerun()
+                    guardar_datos(pd.concat([df_inf, df_nuevo], ignore_index=True), "informes")
+                    st.rerun()
         st.dataframe(df_inf, use_container_width=True)
 
 else:
+    # VISTA PÚBLICA / VITRINA
     st.markdown(f"<h1 style='text-align:center; color:#1e3a8a;'>VITRINA MÉDICA M&O</h1>", unsafe_allow_html=True)
     inv = leer_datos("inventario")
     listos = inv[inv['Estatus'] == "Listo para Venta"]
-    if listos.empty: st.info("Próximamente más equipos.")
+    if listos.empty:
+        st.info("Próximamente más equipos disponibles.")
     else:
         cols = st.columns(3)
         for idx, (_, r) in enumerate(listos.iterrows()):
             with cols[idx % 3]:
                 st.markdown("<div class='card-publica'>", unsafe_allow_html=True)
                 st.subheader(f"{r['Marca']} {r['Modelo']}")
-                st.markdown(f"<div class='precio-tag'>${r['Precio_Sugerido']}</div>", unsafe_allow_html=True)
+                st.markdown(f"<div class='precio-tag'>${r['Precio_Sugerido']:,.2f}</div>", unsafe_allow_html=True)
                 if st.session_state['user_rol'] == 'cliente':
-                    if st.button("🛒 Consultar", key=f"pub_{idx}"): st.success("Ingeniero notificado.")
-                else: st.info("Inicia sesión para adquirir")
+                    if st.button("🛒 Consultar", key=f"pub_{idx}"):
+                        st.success("Solicitud enviada al equipo técnico.")
+                else:
+                    st.info("Inicia sesión para adquirir este equipo")
                 st.markdown("</div>", unsafe_allow_html=True)
