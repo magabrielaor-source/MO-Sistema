@@ -20,32 +20,26 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 
 def leer(h):
     try:
-        # ttl=0 evita que lea datos viejos
         return conn.read(worksheet=h, ttl=0).dropna(how='all')
     except:
         return pd.DataFrame()
 
 def guardar(df, h):
-    # Intentamos guardar los datos de forma limpia
     conn.update(worksheet=h, data=df)
     st.cache_data.clear()
 
 def procesar_foto(archivo):
     if archivo:
         img = Image.open(archivo).convert("RGB")
-        # COMPRESIÓN AGRESIVA: Reducimos a 300px para que Sheets lo acepte siempre
         img.thumbnail((300, 300))
         buf = BytesIO()
-        img.save(buf, format="JPEG", quality=50) # Calidad 50% para peso pluma
+        img.save(buf, format="JPEG", quality=50)
         return base64.b64encode(buf.getvalue()).decode()
     return ""
 
-# --- ESTILOS ---
-st.markdown("<style>.stApp { background-color: #f8fafc; } .card-v { background-color: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); border-top: 5px solid #1e3a8a; margin-bottom: 20px; text-align: center; }</style>", unsafe_allow_html=True)
-
+# --- LOGIN ---
 if 'rol' not in st.session_state: st.session_state.rol = 'visitante'
 
-# --- LOGIN ---
 with st.sidebar:
     if os.path.exists(LOGO): st.image(LOGO)
     st.title(EMPRESA)
@@ -53,13 +47,13 @@ with st.sidebar:
         u, p = st.text_input("Usuario"), st.text_input("Clave", type="password")
         if st.button("Entrar"):
             if u == "admin" and p == "MO2026":
-                st.session_state.update({'rol':'administrador','u_nom':'Admin Maestro','perms':["Dashboard","Inventario","Ventas","Gastos","Informes","Usuarios"]})
+                st.session_state.update({'rol':'admin','u_nom':'Admin Maestro','perms':["Dashboard","Inventario","Ventas","Gastos","Informes","Usuarios"]})
                 st.rerun()
             df_u = leer("usuarios_staff")
             if not df_u.empty:
                 m = df_u[(df_u['Usuario'].astype(str).str.strip()==u.strip()) & (df_u['Password'].astype(str).str.strip()==p.strip())]
                 if not m.empty:
-                    st.session_state.update({'rol':m.iloc[0]['Rol'],'u_nom':u,'perms':["Dashboard","Inventario","Ventas","Gastos","Informes","Usuarios"] if m.iloc[0]['Rol']=='administrador' else str(m.iloc[0]['Permisos']).split(',')})
+                    st.session_state.update({'rol':m.iloc[0]['Rol'],'u_nom':u,'perms':["Dashboard","Inventario","Ventas","Gastos","Informes","Usuarios"] if m.iloc[0]['Rol']=='admin' else str(m.iloc[0]['Permisos']).split(',')})
                     st.rerun()
             st.error("Credenciales incorrectas")
     else:
@@ -70,51 +64,39 @@ with st.sidebar:
 
 # --- VISTAS ---
 if st.session_state.rol != 'visitante':
-    menu = st.sidebar.selectbox("Sección:", st.session_state.perms)
+    menu = st.sidebar.selectbox("Ir a:", st.session_state.perms)
 
-    if menu == "Inventario":
+    if menu == "Dashboard":
+        st.header("📊 Resumen de Negocio")
+        inv, vnt, gas = leer("inventario"), leer("ventas"), leer("gastos")
+        c1, c2, c3 = st.columns(3)
+        if not inv.empty:
+            costo_stk = pd.to_numeric(inv['Costo_Total_Real'], errors='coerce').sum()
+            c1.metric("Inversión Stock", f"${costo_stk:,.2f}")
+            fig = px.pie(inv, names='Estatus', title='Estatus Equipos')
+            st.plotly_chart(fig, use_container_width=True)
+        if not gas.empty:
+            c2.metric("Egresos Totales", f"${pd.to_numeric(gas['Monto'], errors='coerce').sum():,.2f}")
+
+    elif menu == "Inventario":
         st.header("📦 Gestión de Inventario")
         df_inv = leer("inventario")
-        
         with st.expander("➕ Registrar Equipo"):
             with st.form("f_inv", clear_on_submit=True):
                 c1, c2 = st.columns(2)
                 cod, prd, mar, mod = c1.text_input("Código"), c1.text_input("Producto"), c1.text_input("Marca"), c1.text_input("Modelo")
                 ser, ani = c2.text_input("Serial"), c2.number_input("Año", 1990, 2030, 2012)
-                foto = st.file_uploader("📷 Foto del Equipo", type=['jpg','png','jpeg'])
-                ca, cb, cc = st.columns(3)
-                costo_e, costo_v, costo_r = ca.number_input("Ext $"), cb.number_input("Envío $"), cc.number_input("Reparación $")
-                ps, est, tec = st.number_input("Precio Venta $"), st.selectbox("Estatus", ["En Aduana", "En Taller", "Listo para Venta"]), st.text_input("Técnico")
-                des = st.text_area("Descripción")
-                
-                if st.form_submit_button("Sincronizar Equipo"):
+                foto = st.file_uploader("📷 Foto", type=['jpg','jpeg','png'])
+                ce, cv, cr = st.number_input("Costo Ext $"), st.number_input("Envío $"), st.number_input("Reparación $")
+                ps, est = st.number_input("Precio Venta $"), st.selectbox("Estatus", ["En Aduana", "En Taller", "Listo para Venta"])
+                if st.form_submit_button("Sincronizar"):
                     b64 = procesar_foto(foto)
-                    new_data = {
-                        "Código": cod, "Producto": prd, "Marca": mar, "Modelo": mod,
-                        "Serial": ser, "Año": ani, "Cantidad": 1, "Costo_Extranjero": costo_e,
-                        "Envio_VZLA": costo_v, "Inversion_Reparacion": costo_r, 
-                        "Costo_Total_Real": costo_e+costo_v+costo_r,
-                        "Precio_Sugerido": ps, "Tecnico": tec, "Estatus": est, 
-                        "Descripcion": des, "Foto": b64
-                    }
-                    df_final = pd.concat([df_inv, pd.DataFrame([new_data])], ignore_index=True)
+                    # USAMOS DICCIONARIO PARA EVITAR ERROR DE COLUMNAS
+                    nuevo = {"Código":cod,"Producto":prd,"Marca":mar,"Modelo":mod,"Serial":ser,"Año":ani,"Costo_Total_Real":ce+cv+cr,"Precio_Sugerido":ps,"Estatus":est,"Foto":b64}
+                    df_final = pd.concat([df_inv, pd.DataFrame([nuevo])], ignore_index=True)
                     guardar(df_final, "inventario")
-                    st.success("✅ Guardado en Google Sheets"); st.rerun()
-        
+                    st.success("✅ Guardado"); st.rerun()
         st.dataframe(df_inv)
-        if not df_inv.empty:
-            idx = st.number_input("Fila a borrar (Índice)", 0, len(df_inv)-1, 0)
-            if st.button("🗑️ Eliminar permanentemente"):
-                guardar(df_inv.drop(idx), "inventario"); st.rerun()
-
-    elif menu == "Dashboard":
-        st.header("📊 Dashboard Financiero")
-        inv, vnt, gas = leer("inventario"), leer("ventas"), leer("gastos")
-        c1, c2, c3 = st.columns(3)
-        if not inv.empty:
-            c1.metric("Activos Stock", f"${pd.to_numeric(inv['Costo_Total_Real'], errors='coerce').sum():,.2f}")
-            fig = px.pie(inv, names='Estatus', title='Equipos por Estatus')
-            st.plotly_chart(fig, use_container_width=True)
 
     elif menu == "Ventas":
         st.header("💰 Registro de Ventas")
@@ -137,12 +119,13 @@ if st.session_state.rol != 'visitante':
         st.table(df_g)
 
     elif menu == "Informes":
-        st.header("📝 Informes Técnicos")
+        st.header("📝 Informe de Servicio")
         df_inf = leer("informes")
         with st.form("finf"):
-            cl, rf, ts, eq = st.text_input("Cliente"), st.text_input("RIF"), st.selectbox("Tipo", ["Mantenimiento", "Venta"]), st.text_input("Equipo")
-            if st.form_submit_button("Guardar Informe"):
-                ni = pd.concat([df_inf, pd.DataFrame([{"Fecha":datetime.now().date(),"Cliente":cl,"RIF":rf,"Tipo_Servicio":ts,"Equipo":eq,"Tecnico":st.session_state.u_nom}])], ignore_index=True)
+            cli, rif, ts, eq = st.text_input("Cliente"), st.text_input("RIF"), st.selectbox("Tipo", ["Mantenimiento", "Reparación"]), st.text_input("Equipo")
+            falla, trab = st.text_area("Falla"), st.text_area("Trabajo")
+            if st.form_submit_button("Guardar"):
+                ni = pd.concat([df_inf, pd.DataFrame([{"Fecha":datetime.now().date(),"Cliente":cli,"RIF":rif,"Tipo_Servicio":ts,"Equipo":eq,"Falla":falla,"Trabajo_Realizado":trab,"Tecnico":st.session_state.u_nom}])], ignore_index=True)
                 guardar(ni, "informes"); st.rerun()
         st.dataframe(df_inf)
 
@@ -164,8 +147,8 @@ else:
         cols = st.columns(3)
         for i, r in listos.iterrows():
             with cols[i % 3]:
-                st.markdown("<div class='card-v'>", unsafe_allow_html=True)
+                st.markdown("<div style='border:1px solid #ddd; padding:10px; border-radius:10px; text-align:center;'>", unsafe_allow_html=True)
                 if r['Foto']: st.image(f"data:image/jpeg;base64,{r['Foto']}", use_container_width=True)
-                st.subheader(f"{r['Marca']} {r['Modelo']}")
-                st.write(f"Ref: {r['Código']} | ${r['Precio_Sugerido']:,.2f}")
+                st.write(f"**{r['Marca']} {r['Modelo']}**")
+                st.write(f"${r['Precio_Sugerido']}")
                 st.markdown("</div>", unsafe_allow_html=True)
