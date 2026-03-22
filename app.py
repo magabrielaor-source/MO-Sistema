@@ -11,7 +11,7 @@ LOGO = "WhatsApp Image 2026-03-20 at 21.44.39.jpeg"
 
 st.set_page_config(page_title=EMPRESA, layout="wide", page_icon="🏥")
 
-# --- CONEXIÓN ---
+# --- CONEXIÓN A LA NUBE ---
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 def leer(h):
@@ -25,7 +25,7 @@ def guardar(df, h):
     conn.update(worksheet=h, data=df)
     st.cache_data.clear()
 
-# --- ESTILOS ---
+# --- ESTILOS VISUALES ---
 st.markdown("""
 <style>
     .stApp { background-color: #f8fafc; }
@@ -36,45 +36,45 @@ st.markdown("""
 
 if 'rol' not in st.session_state: st.session_state.rol = 'visitante'
 
-# --- SIDEBAR / LOGIN ---
+# --- BARRA LATERAL (LOGIN) ---
 with st.sidebar:
     if os.path.exists(LOGO): st.image(LOGO)
     st.title(EMPRESA)
     if st.session_state.rol == 'visitante':
-        u_input = st.text_input("Usuario")
-        p_input = st.text_input("Clave", type="password")
-        if st.button("Entrar"):
-            # Modo de Emergencia siempre activo
-            if u_input == "admin" and p_input == "MO2026":
+        u_in = st.text_input("Usuario")
+        p_in = st.text_input("Clave", type="password")
+        if st.button("Iniciar Sesión"):
+            # 1. Bypass de Emergencia
+            if u_in == "admin" and p_in == "MO2026":
                 st.session_state.rol = 'administrador'
                 st.session_state.u_nom = "Admin Maestro"
                 st.session_state.perms = ["Dashboard", "Inventario", "Ventas", "Gastos", "Informes"]
                 st.rerun()
             
-            # Intento por Google Sheets
+            # 2. Intento por Google Sheets
             df_u = leer("usuarios_staff")
             if not df_u.empty:
                 df_u['Usuario'] = df_u['Usuario'].astype(str).str.strip()
                 df_u['Password'] = df_u['Password'].astype(str).str.strip()
-                match = df_u[(df_u['Usuario'] == u_input.strip()) & (df_u['Password'] == p_input.strip())]
+                match = df_u[(df_u['Usuario'] == u_in.strip()) & (df_u['Password'] == p_in.strip())]
                 if not match.empty:
                     st.session_state.rol = match.iloc[0]['Rol']
-                    st.session_state.u_nom = u_input
+                    st.session_state.u_nom = u_in
                     st.session_state.perms = ["Dashboard", "Inventario", "Ventas", "Gastos", "Informes"] if st.session_state.rol == 'administrador' else str(match.iloc[0]['Permisos']).split(',')
                     st.rerun()
-            st.error("Credenciales incorrectas")
+            st.error("Credenciales incorrectas o error de conexión")
     else:
-        st.write(f"👤 {st.session_state.u_nom}")
-        if st.button("Salir"):
+        st.write(f"👤 **{st.session_state.u_nom}**")
+        if st.button("Cerrar Sesión"):
             st.session_state.clear()
             st.rerun()
 
-# --- VISTAS ADMINISTRATIVAS ---
+# --- NAVEGACIÓN ADMINISTRATIVA ---
 if st.session_state.rol != 'visitante':
     menu = st.sidebar.selectbox("Sección:", st.session_state.perms)
 
     if menu == "Dashboard":
-        st.header("📊 Resumen de M&O Medical")
+        st.header("📊 Dashboard M&O")
         inv, vnt, gas = leer("inventario"), leer("ventas"), leer("gastos")
         c1, c2, c3 = st.columns(3)
         if not inv.empty:
@@ -84,7 +84,7 @@ if st.session_state.rol != 'visitante':
             c3.metric("Para Venta", len(inv[inv['Estatus'] == 'Listo para Venta']))
 
     elif menu == "Inventario":
-        st.header("📦 Inventario Codificado")
+        st.header("📦 Inventario")
         df_inv = leer("inventario")
         with st.expander("➕ Registrar Equipo"):
             with st.form("f_inv"):
@@ -100,10 +100,10 @@ if st.session_state.rol != 'visitante':
         st.dataframe(df_inv)
 
     elif menu == "Ventas":
-        st.header("💰 Registro de Ventas")
+        st.header("💰 Ventas")
         df_v = leer("ventas")
         with st.form("f_v"):
-            eq_v, sn_v, p_v = st.text_input("Equipo"), st.text_input("Serial"), st.number_input("Precio de Venta $")
+            eq_v, sn_v, p_v = st.text_input("Equipo"), st.text_input("Serial"), st.number_input("Precio Venta $")
             c_v = st.number_input("Costo Inversión $")
             if st.form_submit_button("Registrar Venta"):
                 nv = pd.DataFrame([[datetime.now().date(), eq_v, sn_v, p_v, c_v, (p_v-c_v)]], columns=df_v.columns)
@@ -121,7 +121,7 @@ if st.session_state.rol != 'visitante':
         st.table(df_g)
 
     elif menu == "Informes":
-        st.header("📝 Informe Técnico")
+        st.header("📝 Informe de Servicio")
         df_inf = leer("informes")
         st.markdown(f'<div class="report-box"><h3>{EMPRESA}</h3><p align="right">FECHA: {datetime.now().strftime("%d/%m/%Y")}</p>', unsafe_allow_html=True)
         with st.form("f_inf"):
@@ -133,11 +133,16 @@ if st.session_state.rol != 'visitante':
                 eq, ma, mo, se = st.text_input("Equipo"), st.text_input("Marca"), st.text_input("Modelo"), st.text_input("Serial")
             fa, tr, re = st.text_area("Falla"), st.text_area("Trabajo Realizado"), st.text_area("Repuestos")
             if st.form_submit_button("💾 GUARDAR"):
-                ni = pd.DataFrame([[datetime.now().strftime('%Y-%m-%d'), cli, r_c, d_c, res, tel, t_s, eq, ma, mo, se, fa, tr, re, st.session_state.u_nom]], columns=df_inf.columns)
+                ni = pd.DataFrame([[datetime.now().strftime('%Y-%m-%d'), cli, r_c, d_c, res, tel, t_s, eq, ma, mo, se, falla, trabajo, repue, st.session_state.u_nom]], columns=df_inf.columns)
                 guardar(pd.concat([df_inf, ni], ignore_index=True), "informes"); st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
         st.dataframe(df_inf)
 
 else:
     st.title(f"🏥 Vitrina Médica {EMPRESA}")
-    st.info("Inicia sesión para gestionar el sistema.")
+    st.info("Usa la barra lateral para iniciar sesión.")
+    inv = leer("inventario")
+    if not inv.empty:
+        listos = inv[inv['Estatus'] == 'Listo para Venta']
+        for i, r in listos.iterrows():
+            st.markdown(f"<div class='card-v'><h3>{r['Marca']} {r['Modelo']}</h3><p>${r['Precio_Sugerido']}</p></div>", unsafe_allow_html=True)
